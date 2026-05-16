@@ -11,6 +11,7 @@ import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
@@ -19,17 +20,27 @@ import android.widget.Toast;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
 public class OverlayService extends Service {
 
     private WindowManager windowManager;
-    private View iconView, menuView;
-    private WindowManager.LayoutParams iconParams, menuParams;
+    private View iconView;
+    private View menuView;
+    private WindowManager.LayoutParams iconParams;
+    private WindowManager.LayoutParams menuParams;
 
     private Spinner spnApps;
-    private EditText edtSearch, edtNewValue;
-    private Button btnFirstScan, btnNextScan, btnWrite, btnClose, btnIcon;
+    private EditText edtManualPackage;
+    private EditText edtSearch;
+    private EditText edtNewValue;
+    private Button btnFirstScan;
+    private Button btnNextScan;
+    private Button btnWrite;
+    private Button btnClose;
+    private Button btnIcon;
 
     private List<String> spinnerItems = new ArrayList<>();
     private List<String> packageNames = new ArrayList<>();
@@ -37,12 +48,15 @@ public class OverlayService extends Service {
     static {
         System.loadLibrary("memory_engine");
     }
+    
     public native int firstScan(int pid, int targetValue);
     public native int nextScan(int pid, int targetValue);
     public native int writeNewValue(int pid, int newValue);
 
     @Override
-    public IBinder onBind(Intent intent) { return null; }
+    public IBinder onBind(Intent intent) {
+        return null;
+    }
 
     @Override
     public void onCreate() {
@@ -54,22 +68,30 @@ public class OverlayService extends Service {
         iconView = inflater.inflate(R.layout.overlay_icon, null);
         menuView = inflater.inflate(R.layout.overlay_menu, null);
 
-        int layoutFlag = (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) ?
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY : WindowManager.LayoutParams.TYPE_PHONE;
+        int layoutFlag;
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            layoutFlag = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY;
+        } else {
+            layoutFlag = WindowManager.LayoutParams.TYPE_PHONE;
+        }
 
-        // Küçük ikon pozisyon parametreleri
         iconParams = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
-                layoutFlag, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                layoutFlag,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
         );
         iconParams.gravity = Gravity.TOP | Gravity.START;
-        iconParams.x = 100;
-        iconParams.y = 200;
+        iconParams.x = 150;
+        iconParams.y = 250;
 
-        // Geniş menü parametreleri (Yazı yazabilmek için FOCUSABLE olmalı)
         menuParams = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
-                layoutFlag, WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM, PixelFormat.TRANSLUCENT
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                layoutFlag,
+                WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM,
+                PixelFormat.TRANSLUCENT
         );
         menuParams.gravity = Gravity.CENTER;
 
@@ -80,6 +102,7 @@ public class OverlayService extends Service {
 
     private void setupMenuComponents() {
         spnApps = menuView.findViewById(R.id.spnOverlayApps);
+        edtManualPackage = menuView.findViewById(R.id.edtOverlayManualPackage);
         edtSearch = menuView.findViewById(R.id.edtOverlaySearch);
         edtNewValue = menuView.findViewById(R.id.edtOverlayNewValue);
         btnFirstScan = menuView.findViewById(R.id.btnFirstScan);
@@ -90,13 +113,28 @@ public class OverlayService extends Service {
 
         loadInstalledApps();
 
-        // İkona tıklayınca menüyü aç
+        // Seçim mantığı: Manuel seçilirse kutuyu aç, uygulama seçilirse kutuyu kilitle
+        spnApps.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (position == 0) {
+                    edtManualPackage.setEnabled(true);
+                    edtManualPackage.setVisibility(View.VISIBILITY_VISIBLE);
+                } else {
+                    edtManualPackage.setEnabled(false);
+                    edtManualPackage.setText("");
+                }
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {}
+        });
+
         btnIcon.setOnClickListener(v -> {
             windowManager.removeView(iconView);
             windowManager.addView(menuView, menuParams);
         });
 
-        // X butonuna basınca menüyü kapat, ikonu aç
         btnClose.setOnClickListener(v -> {
             windowManager.removeView(menuView);
             windowManager.addView(iconView, iconParams);
@@ -109,41 +147,77 @@ public class OverlayService extends Service {
 
     private void runScanAction(int mode) {
         try {
-            int pos = spnApps.getSelectedItemPosition();
-            int pid = findPid(packageNames.get(pos));
+            String targetPackage;
+            int selectedPosition = spnApps.getSelectedItemPosition();
+
+            if (selectedPosition == 0) {
+                targetPackage = edtManualPackage.getText().toString().trim();
+                if (targetPackage.isEmpty()) {
+                    Toast.makeText(this, "Lütfen manuel bir paket adı girin!", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+            } else {
+                targetPackage = packageNames.get(selectedPosition);
+            }
+
+            // Paket isminden Linux işletim sistemi PID'sini bulma
+            int pid = findPid(targetPackage);
             if (pid <= 0) {
-                Toast.makeText(this, "Oyun açık değil veya bulunamadı!", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "Hedef uygulama aktif çalışmıyor! Önce oyunu açın.", Toast.LENGTH_LONG).show();
                 return;
             }
 
             if (mode == 1) { // İlk Arama
-                int val = Integer.parseInt(edtSearch.getText().toString());
+                String searchStr = edtSearch.getText().toString().trim();
+                if (searchStr.isEmpty()) return;
+                int val = Integer.parseInt(searchStr);
                 int count = firstScan(pid, val);
-                Toast.makeText(this, "Bulunan Adres: " + count, Toast.LENGTH_SHORT).show();
-            } else if (mode == 2) { // Sonraki Filtreleme
-                int val = Integer.parseInt(edtSearch.getText().toString());
+                Toast.makeText(this, "Tarama bitti. Bulunan adres: " + count, Toast.LENGTH_SHORT).show();
+            } else if (mode == 2) { // Filtreleme
+                String searchStr = edtSearch.getText().toString().trim();
+                if (searchStr.isEmpty()) return;
+                int val = Integer.parseInt(searchStr);
                 int count = nextScan(pid, val);
-                Toast.makeText(this, "Filtrelendi: " + count, Toast.LENGTH_SHORT).show();
-            } else if (mode == 3) { // Değer Değiştirme
-                int val = Integer.parseInt(edtNewValue.getText().toString());
+                Toast.makeText(this, "Filtrelendi. Kalan adres: " + count, Toast.LENGTH_SHORT).show();
+            } else if (mode == 3) { // Değer Yazma
+                String writeStr = edtNewValue.getText().toString().trim();
+                if (writeStr.isEmpty()) return;
+                int val = Integer.parseInt(writeStr);
                 int count = writeNewValue(pid, val);
-                Toast.makeText(this, count + " Adres Güncellendi!", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, count + " Adreste değer başarıyla güncellendi!", Toast.LENGTH_SHORT).show();
             }
+        } catch (NumberFormatException e) {
+            Toast.makeText(this, "Lütfen sadece geçerli tam sayılar girin!", Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
-            Toast.makeText(this, "Lütfen sayıları kontrol edin!", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Hata oluştu: " + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
     }
 
     private void loadInstalledApps() {
         PackageManager pm = getPackageManager();
         List<ApplicationInfo> apps = pm.getInstalledApplications(PackageManager.GET_META_DATA);
+        
+        // İlk eleman manuel giriş tetikleyicisi
+        spinnerItems.add("[Manuel Paket Adı Gir (.com)]");
+        packageNames.add("manual_mode");
+
+        List<ApplicationInfo> userApps = new ArrayList<>();
         for (ApplicationInfo app : apps) {
             if ((app.flags & ApplicationInfo.FLAG_SYSTEM) == 0) {
-                spinnerItems.add(app.loadLabel(pm).toString());
-                packageNames.add(app.packageName);
+                userApps.add(app);
             }
         }
+
+        // Alfabetik sıralama
+        Collections.sort(userApps, (o1, o2) -> o1.loadLabel(pm).toString().compareToIgnoreCase(o2.loadLabel(pm).toString()));
+
+        for (ApplicationInfo app : userApps) {
+            spinnerItems.add(app.loadLabel(pm).toString() + " (" + app.packageName + ")");
+            packageNames.add(app.packageName);
+        }
+
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, spinnerItems);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spnApps.setAdapter(adapter);
     }
 
@@ -152,23 +226,29 @@ public class OverlayService extends Service {
             Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "pidof " + pack});
             BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String l = r.readLine();
-            if (l != null) return Integer.parseInt(l.trim().split(" ")[0]);
+            if (l != null && !l.trim().isEmpty()) {
+                return Integer.parseInt(l.trim().split(" ")[0]);
+            }
         } catch (Exception ignored) {}
         return -1;
     }
 
     private void setupTouchMovement() {
         iconView.setOnTouchListener(new View.OnTouchListener() {
-            private int initialX, initialY;
-            private float initialTouchX, initialTouchY;
+            private int initialX;
+            private int initialY;
+            private float initialTouchX;
+            private float initialTouchY;
 
             @Override
             public boolean onTouch(View v, MotionEvent event) {
                 switch (event.getAction()) {
                     case MotionEvent.ACTION_DOWN:
-                        initialX = iconParams.x; initialY = iconParams.y;
-                        initialTouchX = event.getRawX(); initialTouchY = event.getRawY();
-                        return false; // OnClick tetiklenebilmesi için false kalmalı
+                        initialX = iconParams.x;
+                        initialY = iconParams.y;
+                        initialTouchX = event.getRawX();
+                        initialTouchY = event.getRawY();
+                        return false;
                     case MotionEvent.ACTION_MOVE:
                         iconParams.x = initialX + (int) (event.getRawX() - initialTouchX);
                         iconParams.y = initialY + (int) (event.getRawY() - initialTouchY);
@@ -183,8 +263,7 @@ public class OverlayService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
-        try { windowManager.removeView(iconView); } catch (Exception ignored) {}
-        try { windowManager.removeView(menuView); } catch (Exception ignored) {}
+        if (iconView != null) try { windowManager.removeView(iconView); } catch (Exception ignored) {}
+        if (menuView != null) try { windowManager.removeView(menuView); } catch (Exception ignored) {}
     }
 }
-
