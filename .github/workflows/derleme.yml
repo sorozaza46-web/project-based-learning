@@ -2,7 +2,7 @@ name: Kendi APK Projemiz
 
 on:
   push:
-    branches: [ "master", "main" ] # Projenin ana dalı master veya main ise tetiklenir
+    branches: [ "master", "main" ]
   pull_request:
     branches: [ "master", "main" ]
 
@@ -11,31 +11,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    # 1. Adım: GitHub sunucusuna projenin kodlarını indiriyoruz
     - name: Kodları Depodan Çek
       uses: actions/checkout@v4
 
-    # 2. Adım: Modern Android projeleri için en kararlı Java sürümünü kuruyoruz
     - name: Java JDK 17 Kurulumu
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
         java-version: '17'
-        cache: 'gradle' # Bu sayede sonraki derlemelerin süresi yarı yarıya düşecek
+        # Hata veren cache özelliğini devre dışı bıraktık
 
-    # 3. Adım: Karakter kodlamasından dolayı derlemenin yarıda kesilmesini önlüyoruz
     - name: Java UTF-8 Çözüm Ayarı
       run: echo "GRADLE_OPTS=-Dfile.encoding=utf-8" >> $GITHUB_ENV
 
-    # 4. Adım: Linux işletim sistemine Gradle komutunu çalıştırma yetkisi veriyoruz
     - name: Gradle Çalıştırma İzni Ver
       run: chmod +x ./gradlew
 
-    # 5. Adım: Projeyi eski kalıntılardan temizleyip sıfırdan hatasız bir Debug APK üretiyoruz
     - name: APK Derleme İşlemini Başlat
       run: ./gradlew clean assembleDebug
 
-    # 6. Adım: Oluşan APK dosyasını GitHub paneline indirme linki olarak yüklüyoruz
     - name: Hazır APK Dosyasını Çıktı Olarak Al (Artifact)
       uses: actions/upload-artifact@v4
       with:
