@@ -1,4 +1,3 @@
-// app/build.gradle
 plugins {
     id 'com.android.application'
 }
@@ -13,8 +12,18 @@ android {
         targetSdk 34
         versionCode 1
         versionName "1.0"
+        
+        // C++ Derleme mimarilerini seçiyoruz (Genelde modern telefonlar arm64-v8a kullanır)
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a'
+        }
+    }
 
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    // CMakeLists.txt dosyasının yerini sisteme gösteriyoruz
+    externalNativeBuild {
+        cmake {
+            path file('CMakeLists.txt')
+        }
     }
 
     buildTypes {
@@ -30,9 +39,6 @@ android {
 }
 
 dependencies {
-    // Temel Android kütüphaneleri
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.11.0'
-    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
 }
-
