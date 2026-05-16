@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content">
+    <Button
+        android:id="@+id/btnFloatingIcon"
+        android:layout_width="55dp"
+        android:layout_height="55dp"
+        android:text="M"
+        android:textStyle="bold"
+        android:textColor="#FFFFFF"
+        android:backgroundTint="#FF8800"
+        android:elevation="8dp"/>
+</FrameLayout>
+
