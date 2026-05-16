@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_match"
+    android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:padding="20dp"
@@ -16,14 +16,14 @@
         android:layout_marginBottom="30dp"/>
 
     <EditText
-        id="@+id/edtPid"
+        android:id="@+id/edtPid"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:hint="Hedef Uygulama PID (Örn: 1452)"
         android:inputType="number" />
 
     <EditText
-        id="@+id/edtSearch"
+        android:id="@+id/edtSearch"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:hint="Aranacak Değer (Integer)"
@@ -31,7 +31,7 @@
         android:layout_marginTop="10dp"/>
 
     <EditText
-        id="@+id/edtNewValue"
+        android:id="@+id/edtNewValue"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:hint="Yeni Değer"
@@ -39,11 +39,10 @@
         android:layout_marginTop="10dp"/>
 
     <Button
-        id="@+id/btnApply"
+        android:id="@+id/btnApply"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="TARA VE DEĞİŞTİR"
         android:layout_marginTop="20dp" />
 
 </LinearLayout>
-
