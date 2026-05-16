@@ -10,6 +10,9 @@ struct MemoryRegion {
     unsigned long endAddress;
 };
 
+// Global adres havuzu (Sonraki aramalar için sonuçları burada saklıyoruz)
+std::vector<unsigned long> globalFoundAddresses;
+
 std::vector<MemoryRegion> getValidWritableRegions(pid_t pid) {
     std::vector<MemoryRegion> regions;
     std::string mapsPath = "/proc/" + std::to_string(pid) + "/maps";
@@ -18,8 +21,8 @@ std::vector<MemoryRegion> getValidWritableRegions(pid_t pid) {
     if (fp) {
         char line[512];
         while (fgets(line, sizeof(line), fp)) {
-            // Sadece rw-p ve donanımsal sürücü bağımlılığı olmayan temiz RAM blokları
-            if (strstr(line, "rw-p") && !strstr(line, "/dev/")) {
+            // Sadece rw-p olan ve gereksiz sistem/sürücü bağımlılığı olmayan alanlar
+            if (strstr(line, "rw-p") && !strstr(line, "/dev/") && !strstr(line, "[anon:dalvik")) {
                 unsigned long start, end;
                 if (sscanf(line, "%lx-%lx", &start, &end) == 2) {
                     regions.push_back({start, end});
@@ -51,12 +54,12 @@ bool writeProcessMemory(pid_t pid, unsigned long address, void* buffer, size_t s
     return process_vm_writev(pid, local, 1, remote, 1, 0) == size;
 }
 
-extern "C" JNIEXPORT jlongArray JNICALL
-Java_com_example_mycustomapk_MainActivity_searchMemory(JNIEnv* env, jobject thiz, jint pid, jint target_value) {
+// 1. İLK ARAMA (First Scan)
+extern "C" JNIEXPORT jint JNICALL
+Java_com_example_mycustomapk_OverlayService_firstScan(JNIEnv* env, jobject thiz, jint pid, jint target_value) {
+    globalFoundAddresses.clear();
     std::vector<MemoryRegion> regions = getValidWritableRegions(pid);
-    std::vector<jlong> foundAddresses;
-
-    const size_t maxBlockSize = 25 * 1024 * 1024; // 25 MB güvenlik sınırı
+    const size_t maxBlockSize = 30 * 1024 * 1024; // 30 MB Güvenlik Limiti
 
     for (const auto& region : regions) {
         size_t size = region.endAddress - region.startAddress;
@@ -67,19 +70,45 @@ Java_com_example_mycustomapk_MainActivity_searchMemory(JNIEnv* env, jobject thiz
             for (size_t i = 0; i <= size - sizeof(int); i += sizeof(int)) {
                 int* current_val = (int*)(buffer.data() + i);
                 if (*current_val == target_value) {
-                    foundAddresses.push_back(region.startAddress + i);
+                    globalFoundAddresses.push_back(region.startAddress + i);
                 }
             }
         }
     }
-
-    jlongArray result = env->NewLongArray(foundAddresses.size());
-    env->SetLongArrayRegion(result, 0, foundAddresses.size(), foundAddresses.data());
-    return result;
+    return globalFoundAddresses.size();
 }
 
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_example_mycustomapk_MainActivity_editMemory(JNIEnv* env, jobject thiz, jint pid, jlong address, jint new_value) {
+// 2. SONRAKİ ARAMA / FİLTRELEME (Next Scan)
+extern "C" JNIEXPORT jint JNICALL
+Java_com_example_mycustomapk_OverlayService_nextScan(JNIEnv* env, jobject thiz, jint pid, jint target_value) {
+    if (globalFoundAddresses.empty()) return 0;
+
+    std::vector<unsigned long> filteredList;
+    int tempValue = 0;
+
+    for (unsigned long addr : globalFoundAddresses) {
+        if (readProcessMemory(pid, addr, &tempValue, sizeof(int))) {
+            if (tempValue == target_value) {
+                filteredList.push_back(addr);
+            }
+        }
+    }
+    globalFoundAddresses = filteredList;
+    return globalFoundAddresses.size();
+}
+
+// 3. DEĞERLERİ DEĞİŞTİRME (Write Memory)
+extern "C" JNIEXPORT jint JNICALL
+Java_com_example_mycustomapk_OverlayService_writeNewValue(JNIEnv* env, jobject thiz, jint pid, jint new_value) {
+    if (globalFoundAddresses.empty()) return 0;
+
+    int successCount = 0;
     int value = new_value;
-    return writeProcessMemory(pid, address, &value, sizeof(int)) ? JNI_TRUE : JNI_FALSE;
+
+    for (unsigned long addr : globalFoundAddresses) {
+        if (writeProcessMemory(pid, addr, &value, sizeof(int))) {
+            successCount++;
+        }
+    }
+    return successCount;
 }
