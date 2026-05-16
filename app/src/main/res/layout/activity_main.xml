@@ -4,31 +4,36 @@
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:padding="20dp"
-    android:gravity="center_vertical">
+    android:gravity="top">
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="ROOT MEMORY EDITOR"
+        android:text="ADVANCED MEMORY TOOL"
         android:textSize="20sp"
         android:textStyle="bold"
         android:layout_gravity="center"
-        android:layout_marginBottom="30dp"/>
+        android:layout_marginBottom="20dp"/>
 
-    <EditText
-        android:id="@+id/edtPid"
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Hedef Uygulamayı Seçin:"
+        android:textStyle="bold"
+        android:layout_marginBottom="5dp"/>
+
+    <Spinner
+        android:id="@+id/spnApps"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="Hedef Uygulama PID (Örn: 1452)"
-        android:inputType="number" />
+        android:layout_marginBottom="20dp"/>
 
     <EditText
         android:id="@+id/edtSearch"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:hint="Aranacak Değer (Integer)"
-        android:inputType="number"
-        android:layout_marginTop="10dp"/>
+        android:inputType="number" />
 
     <EditText
         android:id="@+id/edtNewValue"
