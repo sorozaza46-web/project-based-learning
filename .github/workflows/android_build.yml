@@ -1,0 +1,42 @@
+name: Android APK Build
+
+# Hangi durumlarda çalışacağını belirliyoruz
+on:
+  push:
+    branches: [ "main", "master" ] # main veya master branch'ine kod gelince çalışır
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # İsterseniz GitHub panelinden elle (manuel) tetiklemek için
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Depodaki (repository) kodları sanal sunucuya çekiyoruz
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    # 2. Java JDK ortamını kuruyoruz (Android için gerekli)
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
+
+    # 3. Gradle çalıştırma iznini veriyoruz (Linux sunucular için zorunlu)
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+
+    # 4. Hata ayıklama (Debug) APK'sını derliyoruz
+    - name: Build Debug APK
+      run: ./gradlew assembleDebug
+
+    # 5. Üretilen APK dosyasını GitHub paneline yüklüyoruz (İndirebilmeniz için)
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-debug-apk
+        path: app/build/outputs/apk/debug/app-debug.apk
+        
