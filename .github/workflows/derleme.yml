@@ -11,25 +11,34 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    # 1. Adım: Kodları GitHub sunucusuna çekiyoruz
     - name: Kodları Depodan Çek
       uses: actions/checkout@v4
 
+    # 2. Adım: Java JDK 17 Ortamını Kuruyoruz
     - name: Java JDK 17 Kurulumu
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
         java-version: '17'
-        # Hata veren cache özelliğini devre dışı bıraktık
 
+    # 3. Adım: Eksik olan gradlew dosyalarını GitHub sunucusunda otomatik üretiyoruz
+    - name: Gradle Wrapper Sifirdan Olustur (Eksik Dosya Cozumu)
+      run: gradle wrapper --gradle-version 8.2
+
+    # 4. Adım: Karakter kodlaması hatası alınmasını engelliyoruz
     - name: Java UTF-8 Çözüm Ayarı
       run: echo "GRADLE_OPTS=-Dfile.encoding=utf-8" >> $GITHUB_ENV
 
+    # 5. Adım: Yeni üretilen gradlew dosyasına Linux çalıştırma izni veriyoruz
     - name: Gradle Çalıştırma İzni Ver
       run: chmod +x ./gradlew
 
+    # 6. Adım: Projeyi temizleyip Debug APK derlemesini başlatıyoruz
     - name: APK Derleme İşlemini Başlat
       run: ./gradlew clean assembleDebug
 
+    # 7. Adım: Oluşan APK'yı indirilebilir link (Artifact) olarak yüklüyoruz
     - name: Hazır APK Dosyasını Çıktı Olarak Al (Artifact)
       uses: actions/upload-artifact@v4
       with:
