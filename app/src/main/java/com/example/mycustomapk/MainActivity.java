@@ -3,8 +3,8 @@ package com.example.mycustomapk;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
-import android.util.Log;
 import android.view.View;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
@@ -15,15 +15,17 @@ import java.io.BufferedReader;
 import java.io.DataOutputStream;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
 
     private Spinner spnApps;
-    private EditText edtSearch, edtNewValue;
+    private EditText edtManualPackage, edtSearch, edtNewValue;
     private Button btnApply;
     
-    private List<String> appNames = new ArrayList<>();
+    private List<String> spinnerItems = new ArrayList<>();
     private List<String> packageNames = new ArrayList<>();
 
     static {
@@ -37,83 +39,130 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        checkRootAccess();
+        initializeRootCheck();
 
         spnApps = findViewById(R.id.spnApps);
+        edtManualPackage = findViewById(R.id.edtManualPackage);
         edtSearch = findViewById(R.id.edtSearch);
         edtNewValue = findViewById(R.id.edtNewValue);
         btnApply = findViewById(R.id.btnApply);
 
-        // Cihazdaki uygulamaları listele
-        loadInstalledApplications();
+        loadApplications();
+
+        // Seçime göre manuel giriş alanını aktif/pasif yapma kontrolü
+        spnApps.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (position == 0) {
+                    edtManualPackage.setEnabled(true);
+                    edtManualPackage.setHint("Manuel Paket Adı Girin (Örn: com.example)");
+                } else {
+                    edtManualPackage.setEnabled(false);
+                    edtManualPackage.setText("");
+                    edtManualPackage.setHint("Seçilen Uygulama Otomatik Çözümlenecek");
+                }
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {}
+        });
 
         btnApply.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                try {
-                    // Seçilen uygulamanın paket adını al
-                    int selectedIndex = spnApps.getSelectedItemPosition();
-                    String targetPackage = packageNames.get(selectedIndex);
-
-                    // Paket adından otomatik PID bul
-                    int pid = getPidFromPackageName(targetPackage);
-
-                    if (pid == -1) {
-                        Toast.makeText(MainActivity.this, "Seçilen uygulama şu an çalışmıyor! Önce oyunu açın.", Toast.LENGTH_LONG).show();
-                        return;
-                    }
-
-                    int searchValue = Integer.parseInt(edtSearch.getText().toString());
-                    int newValue = Integer.parseInt(edtNewValue.getText().toString());
-
-                    processMemoryManipulation(pid, searchValue, newValue);
-
-                } catch (Exception e) {
-                    Toast.makeText(MainActivity.this, "Hata oluştu! Alanları kontrol edin.", Toast.LENGTH_SHORT).show();
-                }
+                executeMemoryPatchRoutine();
             }
         });
     }
 
-    // Cihazdaki yüklü uygulamaları çeken fonksiyon
-    private void loadInstalledApplications() {
+    private void loadApplications() {
         PackageManager pm = getPackageManager();
         List<ApplicationInfo> packages = pm.getInstalledApplications(PackageManager.GET_META_DATA);
 
-        for (ApplicationInfo packageInfo : packages) {
-            // Sistem uygulamalarını eleyip sadece sonradan yüklenenleri listelemek için filtre
-            if ((packageInfo.flags & ApplicationInfo.FLAG_SYSTEM) == 0) {
-                String appName = packageInfo.loadLabel(pm).toString();
-                appNames.add(appName + " (" + packageInfo.packageName + ")");
-                packageNames.add(packageInfo.packageName);
+        spinnerItems.add("[Manuel Paket İsmi Gir (.com)]");
+        packageNames.add("manual");
+
+        List<ApplicationInfo> userApps = new ArrayList<>();
+        for (ApplicationInfo app : packages) {
+            if ((app.flags & ApplicationInfo.FLAG_SYSTEM) == 0) {
+                userApps.add(app);
             }
         }
 
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, appNames);
+        // Alfabetik sıralama
+        Collections.sort(userApps, new Comparator<ApplicationInfo>() {
+            @Override
+            public int compare(ApplicationInfo o1, ApplicationInfo o2) {
+                return o1.loadLabel(pm).toString().compareToIgnoreCase(o2.loadLabel(pm).toString());
+            }
+        });
+
+        for (ApplicationInfo appInfo : userApps) {
+            String name = appInfo.loadLabel(pm).toString();
+            spinnerItems.add(name + " (" + appInfo.packageName + ")");
+            packageNames.add(appInfo.packageName);
+        }
+
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, spinnerItems);
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spnApps.setAdapter(adapter);
     }
 
-    // Root yetkisiyle çalışan uygulamalardan paket adına göre PID çeken kritik fonksiyon
-    private int getPidFromPackageName(String packageName) {
+    private void executeMemoryPatchRoutine() {
+        try {
+            String targetPackage = "";
+            int selectedPosition = spnApps.getSelectedItemPosition();
+
+            if (selectedPosition == 0) {
+                // Kullanıcı manuel string girdiğinde
+                targetPackage = edtManualPackage.getText().toString().trim();
+                if (targetPackage.isEmpty()) {
+                    Toast.makeText(this, "Lütfen geçerli bir paket adı girin!", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+            } else {
+                // Listeden seçildiğinde
+                targetPackage = packageNames.get(selectedPosition);
+            }
+
+            // Paket ismini işletim sistemi sürecine (PID) dönüştür
+            int targetPid = findPidFromPackageName(targetPackage);
+
+            if (targetPid <= 0) {
+                Toast.makeText(this, "Uygulama arka planda çalışmıyor! Önce oyunu başlatın.", Toast.LENGTH_LONG).show();
+                return;
+            }
+
+            int searchValue = Integer.parseInt(edtSearch.getText().toString());
+            int newValue = Integer.parseInt(edtNewValue.getText().toString());
+
+            startMemoryOperation(targetPid, searchValue, newValue);
+
+        } catch (NumberFormatException e) {
+            Toast.makeText(this, "Değer alanlarını kontrol edin!", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    // İsme göre Linux alt sisteminden süreç kimliğini çeken komut mimarisi
+    private int findPidFromPackageName(String packageName) {
         int pid = -1;
         try {
             Process process = Runtime.getRuntime().exec(new String[]{"su", "-c", "pidof " + packageName});
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
             String line = reader.readLine();
             if (line != null && !line.trim().isEmpty()) {
-                // Eğer birden fazla alt süreç varsa ilk ana süreci alıyoruz
+                // Eğer uygulama birden fazla alt sürece sahipse ana süreci izole ediyoruz
                 pid = Integer.parseInt(line.trim().split(" ")[0]);
             }
             reader.close();
             process.waitFor();
         } catch (Exception e) {
-            Log.e("MemoryTool", "PID bulunamadı", e);
+            pid = -1;
         }
         return pid;
     }
 
-    private void checkRootAccess() {
+    private void initializeRootCheck() {
         try {
             Process p = Runtime.getRuntime().exec("su");
             DataOutputStream os = new DataOutputStream(p.getOutputStream());
@@ -121,27 +170,27 @@ public class MainActivity extends AppCompatActivity {
             os.flush();
             p.waitFor();
         } catch (Exception e) {
-            Toast.makeText(this, "Root erişimi başarısız!", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Root yetkisi alınamadı, hafıza fonksiyonları çalışmayabilir!", Toast.LENGTH_LONG).show();
         }
     }
 
-    private void processMemoryManipulation(int pid, int searchValue, int newValue) {
-        Toast.makeText(this, "PID: " + pid + " taranıyor...", Toast.LENGTH_SHORT).show();
+    private void startMemoryOperation(int pid, int searchVal, int newVal) {
+        Toast.makeText(this, "Hafıza taranıyor (Süreç: " + pid + ")...", Toast.LENGTH_SHORT).show();
 
-        long[] foundAddresses = searchMemory(pid, searchValue);
+        long[] addresses = searchMemory(pid, searchVal);
         
-        if (foundAddresses == null || foundAddresses.length == 0) {
-            Toast.makeText(this, "Değer hafızada bulunamadı!", Toast.LENGTH_SHORT).show();
+        if (addresses == null || addresses.length == 0) {
+            Toast.makeText(this, "Belirtilen değer bellek haritasında bulunamadı!", Toast.LENGTH_SHORT).show();
             return;
         }
 
-        int successCount = 0;
-        for (long addr : foundAddresses) {
-            if (editMemory(pid, addr, newValue)) {
-                successCount++;
+        int modifiedCount = 0;
+        for (long address : addresses) {
+            if (editMemory(pid, address, newVal)) {
+                modifiedCount++;
             }
         }
 
-        Toast.makeText(this, successCount + " adreste değişiklik yapıldı!", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, modifiedCount + " adreste veri başarıyla güncellendi!", Toast.LENGTH_LONG).show();
     }
 }
