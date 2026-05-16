@@ -74,6 +74,7 @@ public class OverlayService extends Service {
             layoutFlag = WindowManager.LayoutParams.TYPE_PHONE;
         }
 
+        // 1. KÜÇÜK İKON PARAMETRELERİ (Arka plana dokunmayı engellemez)
         iconParams = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
@@ -85,11 +86,12 @@ public class OverlayService extends Service {
         iconParams.x = 150;
         iconParams.y = 250;
 
+        // 2. GENİŞ MENÜ PARAMETRELERİ (Klavyenin hatasız açılması için optimize edildi)
         menuParams = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 layoutFlag,
-                WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
                 PixelFormat.TRANSLUCENT
         );
         menuParams.gravity = Gravity.CENTER;
