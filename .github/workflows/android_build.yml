@@ -1,42 +1,45 @@
 name: Android APK Build
 
-# Hangi durumlarda çalışacağını belirliyoruz
 on:
   push:
-    branches: [ "main", "master" ] # main veya master branch'ine kod gelince çalışır
+    branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
-  workflow_dispatch: # İsterseniz GitHub panelinden elle (manuel) tetiklemek için
+  workflow_dispatch: # Manuel olarak da tetikleyebilmek için
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-    # 1. Depodaki (repository) kodları sanal sunucuya çekiyoruz
+    # 1. Kodları sanal sunucuya çekiyoruz
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    # 2. Java JDK ortamını kuruyoruz (Android için gerekli)
+    # 2. Java JDK 17 kurulumu (Önbellek hatasını engellemek için cache kapalı)
     - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
-        cache: gradle
 
-    # 3. Gradle çalıştırma iznini veriyoruz (Linux sunucular için zorunlu)
+    # 3. "Unable to access jarfile" hatasını çözmek için jar dosyasını sunucuya otomatik indiriyoruz
+    - name: Fix Gradle Wrapper JAR
+      run: |
+        mkdir -p gradle/wrapper
+        curl -L -o gradle/wrapper/gradle-wrapper.jar https://github.com/gradle/gradle/raw/master/gradle/wrapper/gradle-wrapper.jar
+
+    # 4. Gradlew için çalıştırma izni veriyoruz
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
-    # 4. Hata ayıklama (Debug) APK'sını derliyoruz
+    # 5. APK Derleme işlemini başlatıyoruz
     - name: Build Debug APK
       run: ./gradlew assembleDebug
 
-    # 5. Üretilen APK dosyasını GitHub paneline yüklüyoruz (İndirebilmeniz için)
+    # 6. Oluşan APK dosyasını GitHub paneline yüklüyoruz (Artifact)
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
         name: app-debug-apk
         path: app/build/outputs/apk/debug/app-debug.apk
-        
