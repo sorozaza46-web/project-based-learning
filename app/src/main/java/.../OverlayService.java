@@ -21,7 +21,6 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 
 public class OverlayService extends Service {
@@ -113,13 +112,12 @@ public class OverlayService extends Service {
 
         loadInstalledApps();
 
-        // Seçim mantığı: Manuel seçilirse kutuyu aç, uygulama seçilirse kutuyu kilitle
         spnApps.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 if (position == 0) {
                     edtManualPackage.setEnabled(true);
-                    edtManualPackage.setVisibility(View.VISIBILITY_VISIBLE);
+                    edtManualPackage.setVisibility(View.VISIBLE);
                 } else {
                     edtManualPackage.setEnabled(false);
                     edtManualPackage.setText("");
@@ -160,26 +158,25 @@ public class OverlayService extends Service {
                 targetPackage = packageNames.get(selectedPosition);
             }
 
-            // Paket isminden Linux işletim sistemi PID'sini bulma
             int pid = findPid(targetPackage);
             if (pid <= 0) {
                 Toast.makeText(this, "Hedef uygulama aktif çalışmıyor! Önce oyunu açın.", Toast.LENGTH_LONG).show();
                 return;
             }
 
-            if (mode == 1) { // İlk Arama
+            if (mode == 1) {
                 String searchStr = edtSearch.getText().toString().trim();
                 if (searchStr.isEmpty()) return;
                 int val = Integer.parseInt(searchStr);
                 int count = firstScan(pid, val);
                 Toast.makeText(this, "Tarama bitti. Bulunan adres: " + count, Toast.LENGTH_SHORT).show();
-            } else if (mode == 2) { // Filtreleme
+            } else if (mode == 2) {
                 String searchStr = edtSearch.getText().toString().trim();
                 if (searchStr.isEmpty()) return;
                 int val = Integer.parseInt(searchStr);
                 int count = nextScan(pid, val);
                 Toast.makeText(this, "Filtrelendi. Kalan adres: " + count, Toast.LENGTH_SHORT).show();
-            } else if (mode == 3) { // Değer Yazma
+            } else if (mode == 3) {
                 String writeStr = edtNewValue.getText().toString().trim();
                 if (writeStr.isEmpty()) return;
                 int val = Integer.parseInt(writeStr);
@@ -197,7 +194,6 @@ public class OverlayService extends Service {
         PackageManager pm = getPackageManager();
         List<ApplicationInfo> apps = pm.getInstalledApplications(PackageManager.GET_META_DATA);
         
-        // İlk eleman manuel giriş tetikleyicisi
         spinnerItems.add("[Manuel Paket Adı Gir (.com)]");
         packageNames.add("manual_mode");
 
@@ -208,7 +204,6 @@ public class OverlayService extends Service {
             }
         }
 
-        // Alfabetik sıralama
         Collections.sort(userApps, (o1, o2) -> o1.loadLabel(pm).toString().compareToIgnoreCase(o2.loadLabel(pm).toString()));
 
         for (ApplicationInfo app : userApps) {
