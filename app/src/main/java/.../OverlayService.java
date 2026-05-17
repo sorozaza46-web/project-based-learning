@@ -2,8 +2,6 @@ package com.example.mycustomapk;
 
 import android.app.Service;
 import android.content.Intent;
-import android.content.pm.ApplicationInfo;
-import android.content.pm.PackageManager;
 import android.graphics.PixelFormat;
 import android.os.IBinder;
 import android.view.Gravity;
@@ -11,17 +9,13 @@ import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
-import android.widget.AdapterView;
-import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
-import android.widget.Spinner;
+import android.widget.TextView;
 import android.widget.Toast;
 import java.io.BufferedReader;
+import java.io.DataOutputStream;
 import java.io.InputStreamReader;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
 
 public class OverlayService extends Service {
 
@@ -31,8 +25,7 @@ public class OverlayService extends Service {
     private WindowManager.LayoutParams iconParams;
     private WindowManager.LayoutParams menuParams;
 
-    private Spinner spnApps;
-    private EditText edtManualPackage;
+    private TextView txtTargetStatus;
     private EditText edtSearch;
     private EditText edtNewValue;
     private Button btnFirstScan;
@@ -40,9 +33,10 @@ public class OverlayService extends Service {
     private Button btnWrite;
     private Button btnClose;
     private Button btnIcon;
+    private Button btnAutoDetect;
 
-    private List<String> spinnerItems = new ArrayList<>();
-    private List<String> packageNames = new ArrayList<>();
+    private int detectedPid = -1;
+    private String detectedPackageName = "";
 
     static {
         System.loadLibrary("memory_engine");
@@ -60,6 +54,9 @@ public class OverlayService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+
+        // 1. ADIM: SELinux Korumasını Kökten Kapat (process_vm_readv İzin Hatasını Çözer)
+        disableSELinux();
 
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         LayoutInflater inflater = LayoutInflater.from(this);
@@ -97,11 +94,78 @@ public class OverlayService extends Service {
         windowManager.addView(iconView, iconParams);
         setupMenuComponents();
         setupTouchMovement();
+
+        // Servis açılır açılmaz ilk otomatik taramayı bir kez tetikle
+        autoDetectTargetProcess();
+    }
+
+    // Root yetkisiyle SELinux politikasını Permissive moda çeken fonksiyon
+    private void disableSELinux() {
+        try {
+            Process p = Runtime.getRuntime().exec("su");
+            DataOutputStream os = new DataOutputStream(p.getOutputStream());
+            os.writeBytes("setenforce 0\n");
+            os.writeBytes("exit\n");
+            os.flush();
+            os.close();
+            p.waitFor();
+        } catch (Exception e) {
+            Toast.makeText(this, "SELinux kapatılamadı, root yetkisi eksik olabilir!", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    // 2. ADIM: Otomatik Süreç Bulma Algoritması (GameGuardian Tarzı Otomatik Yakalama)
+    private void autoDetectTargetProcess() {
+        try {
+            // Cihazda o an aktif çalışan tüm süreçlerin adını ve PID değerini alan Linux kabuk komutu
+            Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "ps -A -o PID,NAME"});
+            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String line;
+            
+            boolean found = false;
+            while ((line = r.readLine()) != null) {
+                String trimmed = line.trim();
+                // Popüler hedef oyun kelimeleri ve senin özel launcher paketlerin
+                if (trimmed.contains("minecraft") || 
+                    trimmed.contains("sonoyuncu") || 
+                    trimmed.contains("com.mojang.") || 
+                    trimmed.contains("unity") || 
+                    trimmed.contains("tencent") ||
+                    trimmed.contains("valve")) {
+                    
+                    // Satırı boşluklara göre bölüp PID ve paket adını ayırıyoruz
+                    String[] tokens = trimmed.split("\\s+");
+                    if (tokens.length >= 2) {
+                        detectedPid = Integer.parseInt(tokens[0]);
+                        detectedPackageName = tokens[1];
+                        found = true;
+                        break; // İlk eşleşen aktif oyunu al ve çık
+                    }
+                }
+            }
+            r.close();
+            p.waitFor();
+
+            if (found) {
+                txtTargetStatus.setText("Hedef: " + detectedPackageName + " (PID: " + detectedPid + ")");
+                txtTargetStatus.setTextColor(0xFF00FF00); // Yeşil renk
+            } else {
+                txtTargetStatus.setText("Oyun bulunamadı! Lütfen oyunu açın.");
+                txtTargetStatus.setTextColor(0xFFFF0000); // Kırmızı renk
+                detectedPid = -1;
+            }
+
+        } catch (Exception e) {
+            txtTargetStatus.setText("Süreç tarama hatası!");
+            detectedPid = -1;
+        }
     }
 
     private void setupMenuComponents() {
-        spnApps = menuView.findViewById(R.id.spnOverlayApps);
-        edtManualPackage = menuView.findViewById(R.id.edtOverlayManualPackage);
+        // XML arayüzündeki Spinner bileşenini sildiğimiz için durum metni ve otomatik bul butonunu bağlıyoruz
+        txtTargetStatus = menuView.findViewById(R.id.txtTargetStatus); // Arayüze ekleyeceğin TextView ID'si
+        btnAutoDetect = menuView.findViewById(R.id.btnAutoDetect);     // Arayüze ekleyeceğin Yenile Butonu ID'si
+        
         edtSearch = menuView.findViewById(R.id.edtOverlaySearch);
         edtNewValue = menuView.findViewById(R.id.edtOverlayNewValue);
         btnFirstScan = menuView.findViewById(R.id.btnFirstScan);
@@ -110,28 +174,18 @@ public class OverlayService extends Service {
         btnClose = menuView.findViewById(R.id.btnCloseMenu);
         btnIcon = iconView.findViewById(R.id.btnFloatingIcon);
 
-        loadInstalledApps();
-
-        spnApps.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                if (position == 0) {
-                    edtManualPackage.setEnabled(true);
-                    edtManualPackage.setVisibility(View.VISIBLE);
-                } else {
-                    edtManualPackage.setEnabled(false);
-                    edtManualPackage.setText("");
-                    edtManualPackage.setVisibility(View.GONE);
-                }
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {}
-        });
-
         btnIcon.setOnClickListener(v -> {
             windowManager.removeView(iconView);
             windowManager.addView(menuView, menuParams);
+            // Menü her açıldığında hedefi arka planda otomatik olarak tazele
+            autoDetectTargetProcess();
+        });
+
+        btnAutoDetect.setOnClickListener(v -> {
+            autoDetectTargetProcess();
+            if (detectedPid != -1) {
+                Toast.makeText(this, "Hedef güncellendi: " + detectedPackageName, Toast.LENGTH_SHORT).show();
+            }
         });
 
         btnClose.setOnClickListener(v -> {
@@ -145,88 +199,41 @@ public class OverlayService extends Service {
     }
 
     private void runScanAction(int mode) {
+        if (detectedPid <= 0) {
+            Toast.makeText(this, "Aktif bir hedef süreç seçilmedi! Önce otomatik tara yapın.", Toast.LENGTH_LONG).show();
+            return;
+        }
+
         try {
-            String targetPackage;
-            int selectedPosition = spnApps.getSelectedItemPosition();
-
-            if (selectedPosition == 0) {
-                targetPackage = edtManualPackage.getText().toString().trim();
-                if (targetPackage.isEmpty()) {
-                    Toast.makeText(this, "Lütfen manuel bir paket adı girin!", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-            } else {
-                targetPackage = packageNames.get(selectedPosition);
-            }
-
-            int pid = findPid(targetPackage);
-            if (pid <= 0) {
-                Toast.makeText(this, "Hedef uygulama aktif çalışmıyor! Önce oyunu açın.", Toast.LENGTH_LONG).show();
-                return;
-            }
-
             if (mode == 1) {
                 String searchStr = edtSearch.getText().toString().trim();
                 if (searchStr.isEmpty()) return;
                 int val = Integer.parseInt(searchStr);
-                int count = firstScan(pid, val);
+                
+                // JNI katmanından process_vm_readv tetiklenir
+                int count = firstScan(detectedPid, val);
                 Toast.makeText(this, "Tarama bitti. Bulunan: " + count, Toast.LENGTH_SHORT).show();
             } else if (mode == 2) {
                 String searchStr = edtSearch.getText().toString().trim();
                 if (searchStr.isEmpty()) return;
                 int val = Integer.parseInt(searchStr);
-                int count = nextScan(pid, val);
+                
+                int count = nextScan(detectedPid, val);
                 Toast.makeText(this, "Filtrelendi. Kalan: " + count, Toast.LENGTH_SHORT).show();
             } else if (mode == 3) {
                 String writeStr = edtNewValue.getText().toString().trim();
                 if (writeStr.isEmpty()) return;
                 int val = Integer.parseInt(writeStr);
-                int count = writeNewValue(pid, val);
+                
+                // JNI katmanından process_vm_writev tetiklenir
+                int count = writeNewValue(detectedPid, val);
                 Toast.makeText(this, count + " Adreste değer başarıyla güncellendi!", Toast.LENGTH_SHORT).show();
             }
         } catch (NumberFormatException e) {
-            Toast.makeText(this, "Lütfen sadece geçerli tam sayılar girin!", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Lütfen geçerli tam sayılar girin!", Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
-            Toast.makeText(this, "Hata oluştu: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Hata: " + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
-    }
-
-    private void loadInstalledApps() {
-        PackageManager pm = getPackageManager();
-        List<ApplicationInfo> apps = pm.getInstalledApplications(PackageManager.GET_META_DATA);
-        
-        spinnerItems.add("[Manuel Paket Adı Gir (.com)]");
-        packageNames.add("manual_mode");
-
-        List<ApplicationInfo> userApps = new ArrayList<>();
-        for (ApplicationInfo app : apps) {
-            if ((app.flags & ApplicationInfo.FLAG_SYSTEM) == 0) {
-                userApps.add(app);
-            }
-        }
-
-        Collections.sort(userApps, (o1, o2) -> o1.loadLabel(pm).toString().compareToIgnoreCase(o2.loadLabel(pm).toString()));
-
-        for (ApplicationInfo app : userApps) {
-            spinnerItems.add(app.loadLabel(pm).toString() + " (" + app.packageName + ")");
-            packageNames.add(app.packageName);
-        }
-
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, spinnerItems);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spnApps.setAdapter(adapter);
-    }
-
-    private int findPid(String pack) {
-        try {
-            Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "pidof " + pack});
-            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            String l = r.readLine();
-            if (l != null && !l.trim().isEmpty()) {
-                return Integer.parseInt(l.trim().split(" ")[0]);
-            }
-        } catch (Exception ignored) {}
-        return -1;
     }
 
     private void setupTouchMovement() {
