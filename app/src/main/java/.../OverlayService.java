@@ -5,6 +5,8 @@ import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.PixelFormat;
+import android.net.LocalSocket;
+import android.net.LocalSocketAddress;
 import android.os.IBinder;
 import android.view.Gravity;
 import android.view.LayoutInflater;
@@ -18,7 +20,12 @@ import android.widget.EditText;
 import android.widget.Spinner;
 import android.widget.Toast;
 import java.io.BufferedReader;
+import java.io.DataOutputStream;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -44,14 +51,6 @@ public class OverlayService extends Service {
     private List<String> spinnerItems = new ArrayList<>();
     private List<String> packageNames = new ArrayList<>();
 
-    static {
-        System.loadLibrary("memory_engine");
-    }
-    
-    public native int firstScan(int pid, int targetValue);
-    public native int nextScan(int pid, int targetValue);
-    public native int writeNewValue(int pid, int newValue);
-
     @Override
     public IBinder onBind(Intent intent) {
         return null;
@@ -60,6 +59,9 @@ public class OverlayService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+
+        // Uygulama başlar başlamaz Root Daemon'ı arka planda en yüksek yetkiyle çalıştırıyoruz
+        startRootDaemon();
 
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         LayoutInflater inflater = LayoutInflater.from(this);
@@ -74,7 +76,6 @@ public class OverlayService extends Service {
             layoutFlag = WindowManager.LayoutParams.TYPE_PHONE;
         }
 
-        // 1. KÜÇÜK İKON PARAMETRELERİ (Arka plana dokunmayı engellemez)
         iconParams = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
@@ -86,7 +87,6 @@ public class OverlayService extends Service {
         iconParams.x = 150;
         iconParams.y = 250;
 
-        // 2. GENİŞ MENÜ PARAMETRELERİ (Klavyenin hatasız açılması için optimize edildi)
         menuParams = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
@@ -99,6 +99,46 @@ public class OverlayService extends Service {
         windowManager.addView(iconView, iconParams);
         setupMenuComponents();
         setupTouchMovement();
+    }
+
+    private void startRootDaemon() {
+        try {
+            String appRawPath = getApplicationInfo().nativeLibraryDir + "/../stealth_daemon";
+            Process p = Runtime.getRuntime().exec("su");
+            DataOutputStream os = new DataOutputStream(p.getOutputStream());
+            // Daemon dosyasını arka planda root olarak asılı bırakıyoruz
+            os.writeBytes("chmod 777 " + appRawPath + "\n");
+            os.writeBytes(appRawPath + " &\n");
+            os.writeBytes("exit\n");
+            os.flush();
+        } catch (Exception ignored) {}
+    }
+
+    private int sendDaemonCommand(int mode, int pid, int value) {
+        try {
+            LocalSocket socket = new LocalSocket();
+            LocalSocketAddress address = new LocalSocketAddress("stealth_mem_socket", LocalSocketAddress.Namespace.ABSTRACT);
+            socket.connect(address);
+
+            OutputStream os = socket.getOutputStream();
+            ByteBuffer buf = ByteBuffer.allocate(12);
+            buf.order(ByteOrder.LITTLE_ENDIAN);
+            buf.putInt(mode);
+            buf.putInt(pid);
+            buf.putInt(value);
+            os.write(buf.array());
+            os.flush();
+
+            InputStream is = socket.getInputStream();
+            byte[] resBuf = new byte[4];
+            if (is.read(resBuf) == 4) {
+                return ByteBuffer.wrap(resBuf).order(ByteOrder.LITTLE_ENDIAN).getInt();
+            }
+            socket.close();
+        } catch (Exception e) {
+            return -2; // Soket bağlantı hatası daemon çalışmıyor olabilir
+        }
+        return -1;
     }
 
     private void setupMenuComponents() {
@@ -123,6 +163,7 @@ public class OverlayService extends Service {
                 } else {
                     edtManualPackage.setEnabled(false);
                     edtManualPackage.setText("");
+                    edtManualPackage.setVisibility(View.GONE);
                 }
             }
 
@@ -162,7 +203,7 @@ public class OverlayService extends Service {
 
             int pid = findPid(targetPackage);
             if (pid <= 0) {
-                Toast.makeText(this, "Hedef uygulama aktif çalışmıyor! Önce oyunu açın.", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "Hedef uygulama aktif çalışmıyor!", Toast.LENGTH_LONG).show();
                 return;
             }
 
@@ -170,25 +211,24 @@ public class OverlayService extends Service {
                 String searchStr = edtSearch.getText().toString().trim();
                 if (searchStr.isEmpty()) return;
                 int val = Integer.parseInt(searchStr);
-                int count = firstScan(pid, val);
-                Toast.makeText(this, "Tarama bitti. Bulunan adres: " + count, Toast.LENGTH_SHORT).show();
+                int count = sendDaemonCommand(1, pid, val);
+                if (count == -2) Toast.makeText(this, "Root sunucusu yanıt vermiyor!", Toast.LENGTH_SHORT).show();
+                else Toast.makeText(this, "Tarama bitti. Bulunan: " + count, Toast.LENGTH_SHORT).show();
             } else if (mode == 2) {
                 String searchStr = edtSearch.getText().toString().trim();
                 if (searchStr.isEmpty()) return;
                 int val = Integer.parseInt(searchStr);
-                int count = nextScan(pid, val);
-                Toast.makeText(this, "Filtrelendi. Kalan adres: " + count, Toast.LENGTH_SHORT).show();
+                int count = sendDaemonCommand(2, pid, val);
+                Toast.makeText(this, "Filtrelendi. Kalan: " + count, Toast.LENGTH_SHORT).show();
             } else if (mode == 3) {
                 String writeStr = edtNewValue.getText().toString().trim();
                 if (writeStr.isEmpty()) return;
                 int val = Integer.parseInt(writeStr);
-                int count = writeNewValue(pid, val);
-                Toast.makeText(this, count + " Adreste değer başarıyla güncellendi!", Toast.LENGTH_SHORT).show();
+                int count = sendDaemonCommand(3, pid, val);
+                Toast.makeText(this, count + " Adreste değer değiştirildi!", Toast.LENGTH_SHORT).show();
             }
         } catch (NumberFormatException e) {
-            Toast.makeText(this, "Lütfen sadece geçerli tam sayılar girin!", Toast.LENGTH_SHORT).show();
-        } catch (Exception e) {
-            Toast.makeText(this, "Hata oluştu: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Lütfen geçerli sayılar girin!", Toast.LENGTH_SHORT).show();
         }
     }
 
