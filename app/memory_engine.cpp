@@ -1,19 +1,21 @@
+#define _LARGEFILE64_SOURCE // 64-bit ofset desteğini etkinleştirir (Kritik)
 #include <jni.h>
 #include <string>
 #include <vector>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/types.h>
+#include <cstring>
 
 struct MemoryRegion {
     unsigned long startAddress;
     unsigned long endAddress;
 };
 
-// Global adres havuzu (Sonraki filtrelemeler için hafızada tutulur)
+// Global adres havuzu (Filtrelemeler için hafızada tutulur)
 std::vector<unsigned long> globalFoundAddresses;
 
-// Hedef sürecin okunabilir ve yazılabilir (rw-p) bellek alanlarını haritalandırır
+// Hedef sürecin tüm rw-p (Read-Write-Private) alanlarını haritalandırır
 std::vector<MemoryRegion> getValidWritableRegions(pid_t pid) {
     std::vector<MemoryRegion> regions;
     std::string mapsPath = "/proc/" + std::to_string(pid) + "/maps";
@@ -22,8 +24,9 @@ std::vector<MemoryRegion> getValidWritableRegions(pid_t pid) {
     if (fp) {
         char line[512];
         while (fgets(line, sizeof(line), fp)) {
-            // Sadece rw-p olan, korumasız ve oyun verilerinin saklandığı anonim alanlar
-            if (strstr(line, "rw-p") && !strstr(line, "/dev/") && !strstr(line, "[anon:dalvik") && !strstr(line, ".apk")) {
+            // DÜZELTME: Kısıtlayıcı filtreler kaldırıldı. 
+            // Artık anon:dalvik, libc_malloc dahil oyunun tüm rw-p alanları taranacak.
+            if (strstr(line, "rw-p")) {
                 unsigned long start, end;
                 if (sscanf(line, "%lx-%lx", &start, &end) == 2) {
                     regions.push_back({start, end});
@@ -35,35 +38,38 @@ std::vector<MemoryRegion> getValidWritableRegions(pid_t pid) {
     return regions;
 }
 
-// 1. İLK ARAMA (First Scan) - /proc/[PID]/mem Dosyasını Root Yetkisiyle Doğrudan Okur
+// 1. İLK ARAMA (First Scan)
 extern "C" JNIEXPORT jint JNICALL
 Java_com_example_mycustomapk_OverlayService_firstScan(JNIEnv* env, jobject thiz, jint pid, jint target_value) {
     globalFoundAddresses.clear();
     std::vector<MemoryRegion> regions = getValidWritableRegions(pid);
     
-    // Root yetkisiyle ham bellek dosyasını açıyoruz (SELinux engelini aşmak için kilit nokta)
     std::string memPath = "/proc/" + std::to_string(pid) + "/mem";
     int memFd = open(memPath.c_str(), O_RDONLY);
     if (memFd < 0) {
-        return 0; // Dosya açılamadıysa izin hatası veya süreç sonlanmıştır
+        return 0; // Kök yetkisi eksikliği veya SELinux engeli
     }
 
-    const size_t maxBlockSize = 20 * 1024 * 1024; // Cihazın şişmesini önlemek için 20MB güvenlik sınırı
+    // Büyük bölgelerin okunmasında taşmayı önlemek için makul güvenlik sınırı (50MB)
+    const size_t maxBlockSize = 50 * 1024 * 1024; 
 
     for (const auto& region : regions) {
         size_t size = region.endAddress - region.startAddress;
         if (size <= 0 || size > maxBlockSize) continue;
         
         std::vector<char> buffer(size);
-        // Hedef adrese git ve ham veriyi oku
-        if (lseek64(memFd, region.startAddress, SEEK_SET) != -1) {
-            if (read(memFd, buffer.data(), size) == size) {
-                // Bellek bloğunun içinde 4'er byte kayarak tamsayı arıyoruz (Dword standardı)
-                for (size_t i = 0; i <= size - sizeof(int); i += sizeof(int)) {
-                    int* current_val = (int*)(buffer.data() + i);
-                    if (*current_val == target_value) {
-                        globalFoundAddresses.push_back(region.startAddress + i);
-                    }
+        
+        // Atomik pread64 kullanımı
+        if (pread64(memFd, buffer.data(), size, region.startAddress) == static_cast<ssize_t>(size)) {
+            
+            // GameGuardian mantığı: 1 byte kaydırarak kesin arama (i += 1)
+            for (size_t i = 0; i <= size - sizeof(int); i += 1) {
+                int current_val;
+                // Hizalama hatasını önlemek için güvenli kopyalama
+                std::memcpy(&current_val, buffer.data() + i, sizeof(int)); 
+                
+                if (current_val == target_value) {
+                    globalFoundAddresses.push_back(region.startAddress + i);
                 }
             }
         }
@@ -84,11 +90,9 @@ Java_com_example_mycustomapk_OverlayService_nextScan(JNIEnv* env, jobject thiz, 
     if (memFd >= 0) {
         int tempValue = 0;
         for (unsigned long addr : globalFoundAddresses) {
-            if (lseek64(memFd, addr, SEEK_SET) != -1) {
-                if (read(memFd, &tempValue, sizeof(int)) == sizeof(int)) {
-                    if (tempValue == target_value) {
-                        filteredList.push_back(addr);
-                    }
+            if (pread64(memFd, &tempValue, sizeof(int), addr) == sizeof(int)) {
+                if (tempValue == target_value) {
+                    filteredList.push_back(addr);
                 }
             }
         }
@@ -106,17 +110,13 @@ Java_com_example_mycustomapk_OverlayService_writeNewValue(JNIEnv* env, jobject t
 
     int successCount = 0;
     std::string memPath = "/proc/" + std::to_string(pid) + "/mem";
-    
-    // Yazma işlemi için O_WRONLY veya O_RDWR modunda açıyoruz
     int memFd = open(memPath.c_str(), O_WRONLY);
     
     if (memFd >= 0) {
         int value = new_value;
         for (unsigned long addr : globalFoundAddresses) {
-            if (lseek64(memFd, addr, SEEK_SET) != -1) {
-                if (write(memFd, &value, sizeof(int)) == sizeof(int)) {
-                    successCount++;
-                }
+            if (pwrite64(memFd, &value, sizeof(int), addr) == sizeof(int)) {
+                successCount++;
             }
         }
         close(memFd);
