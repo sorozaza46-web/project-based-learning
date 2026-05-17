@@ -21,6 +21,9 @@ import android.widget.Spinner;
 import android.widget.Toast;
 import java.io.BufferedReader;
 import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -60,8 +63,8 @@ public class OverlayService extends Service {
     public void onCreate() {
         super.onCreate();
 
-        // Uygulama başlar başlamaz Root Daemon'ı arka planda en yüksek yetkiyle çalıştırıyoruz
-        startRootDaemon();
+        // SELinux engelini aşacak yeni güvenli çalıştırma metodu
+        startRootDaemonSecure();
 
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         LayoutInflater inflater = LayoutInflater.from(this);
@@ -101,44 +104,76 @@ public class OverlayService extends Service {
         setupTouchMovement();
     }
 
-    private void startRootDaemon() {
+    private void startRootDaemonSecure() {
         try {
-            String appRawPath = getApplicationInfo().nativeLibraryDir + "/../stealth_daemon";
+            // APK içinde derlenen asıl binary yolu
+            String sourcePath = getApplicationInfo().nativeLibraryDir + "/../stealth_daemon";
+            File sourceFile = new File(sourcePath);
+            
+            // Güvenli çalışma bölgesi dizini
+            String targetPath = "/data/local/tmp/stealth_daemon";
+            File targetFile = new File(targetPath);
+
+            // Dosyayı her açılışta /data/local/tmp altına güvenle kopyala (SELinux bypass)
+            if (sourceFile.exists()) {
+                FileInputStream in = new FileInputStream(sourceFile);
+                FileOutputStream out = new FileOutputStream(targetFile);
+                byte[] buffer = new byte[1024];
+                int read;
+                while ((read = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, read);
+                }
+                in.close();
+                out.close();
+            }
+
+            // Kopyalanan dosyayı root yetkisiyle ayaklandır
             Process p = Runtime.getRuntime().exec("su");
             DataOutputStream os = new DataOutputStream(p.getOutputStream());
-            // Daemon dosyasını arka planda root olarak asılı bırakıyoruz
-            os.writeBytes("chmod 777 " + appRawPath + "\n");
-            os.writeBytes(appRawPath + " &\n");
+            
+            // Mevcut çalışan eski süreçler varsa çakışmayı önlemek için sonlandır
+            os.writeBytes("pkill -f stealth_daemon\n");
+            
+            // İzinleri ver ve arka planda çalıştır
+            os.writeBytes("chmod 777 " + targetPath + "\n");
+            os.writeBytes(targetPath + " &\n");
             os.writeBytes("exit\n");
             os.flush();
+            os.close();
+            p.waitFor();
         } catch (Exception ignored) {}
     }
 
     private int sendDaemonCommand(int mode, int pid, int value) {
-        try {
-            LocalSocket socket = new LocalSocket();
-            LocalSocketAddress address = new LocalSocketAddress("stealth_mem_socket", LocalSocketAddress.Namespace.ABSTRACT);
-            socket.connect(address);
+        // Sunucuya bağlanmak için 3 kez deneme mekanizması (Daemon'ın açılış süresini tolere etmek için)
+        for (int i = 0; i < 3; i++) {
+            try {
+                LocalSocket socket = new LocalSocket();
+                LocalSocketAddress address = new LocalSocketAddress("stealth_mem_socket", LocalSocketAddress.Namespace.ABSTRACT);
+                socket.connect(address);
 
-            OutputStream os = socket.getOutputStream();
-            ByteBuffer buf = ByteBuffer.allocate(12);
-            buf.order(ByteOrder.LITTLE_ENDIAN);
-            buf.putInt(mode);
-            buf.putInt(pid);
-            buf.putInt(value);
-            os.write(buf.array());
-            os.flush();
+                OutputStream os = socket.getOutputStream();
+                ByteBuffer buf = ByteBuffer.allocate(12);
+                buf.order(ByteOrder.LITTLE_ENDIAN);
+                buf.putInt(mode);
+                buf.putInt(pid);
+                buf.putInt(value);
+                os.write(buf.array());
+                os.flush();
 
-            InputStream is = socket.getInputStream();
-            byte[] resBuf = new byte[4];
-            if (is.read(resBuf) == 4) {
-                return ByteBuffer.wrap(resBuf).order(ByteOrder.LITTLE_ENDIAN).getInt();
+                InputStream is = socket.getInputStream();
+                byte[] resBuf = new byte[4];
+                int readBytes = is.read(resBuf);
+                socket.close();
+
+                if (readBytes == 4) {
+                    return ByteBuffer.wrap(resBuf).order(ByteOrder.LITTLE_ENDIAN).getInt();
+                }
+            } catch (Exception e) {
+                try { Thread.sleep(150); } catch (InterruptedException ignored) {}
             }
-            socket.close();
-        } catch (Exception e) {
-            return -2; // Soket bağlantı hatası daemon çalışmıyor olabilir
         }
-        return -1;
+        return -2; // 3 deneme sonunda da başarısız olunursa hata kodu döner
     }
 
     private void setupMenuComponents() {
@@ -203,7 +238,7 @@ public class OverlayService extends Service {
 
             int pid = findPid(targetPackage);
             if (pid <= 0) {
-                Toast.makeText(this, "Hedef uygulama aktif çalışmıyor!", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "Hedef uygulama aktif çalışmıyor! Önce oyunu açın.", Toast.LENGTH_LONG).show();
                 return;
             }
 
@@ -212,23 +247,34 @@ public class OverlayService extends Service {
                 if (searchStr.isEmpty()) return;
                 int val = Integer.parseInt(searchStr);
                 int count = sendDaemonCommand(1, pid, val);
-                if (count == -2) Toast.makeText(this, "Root sunucusu yanıt vermiyor!", Toast.LENGTH_SHORT).show();
-                else Toast.makeText(this, "Tarama bitti. Bulunan: " + count, Toast.LENGTH_SHORT).show();
+                if (count == -2) {
+                    Toast.makeText(this, "Root sunucusu yanıt vermiyor! Lütfen root iznini kontrol edin.", Toast.LENGTH_LONG).show();
+                } else {
+                    Toast.makeText(this, "Tarama bitti. Bulunan: " + count, Toast.LENGTH_SHORT).show();
+                }
             } else if (mode == 2) {
                 String searchStr = edtSearch.getText().toString().trim();
                 if (searchStr.isEmpty()) return;
                 int val = Integer.parseInt(searchStr);
                 int count = sendDaemonCommand(2, pid, val);
-                Toast.makeText(this, "Filtrelendi. Kalan: " + count, Toast.LENGTH_SHORT).show();
+                if (count == -2) {
+                    Toast.makeText(this, "Root sunucusu koptu!", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(this, "Filtrelendi. Kalan: " + count, Toast.LENGTH_SHORT).show();
+                }
             } else if (mode == 3) {
                 String writeStr = edtNewValue.getText().toString().trim();
                 if (writeStr.isEmpty()) return;
                 int val = Integer.parseInt(writeStr);
                 int count = sendDaemonCommand(3, pid, val);
-                Toast.makeText(this, count + " Adreste değer değiştirildi!", Toast.LENGTH_SHORT).show();
+                if (count == -2) {
+                    Toast.makeText(this, "Değişiklik başarısız, sunucu koptu!", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(this, count + " Adreste değer başarıyla değiştirildi!", Toast.LENGTH_SHORT).show();
+                }
             }
         } catch (NumberFormatException e) {
-            Toast.makeText(this, "Lütfen geçerli sayılar girin!", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Lütfen geçerli tam sayılar girin!", Toast.LENGTH_SHORT).show();
         }
     }
 
